@@ -3526,6 +3526,26 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 _set_token_attr("[MASK]", LLAMA_TOKEN_ATTR_LSTRIP, true);
             }
         }
+
+        // added tokens that only match as whole words (HF single_word)
+        const int sw_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SINGLE_WORD_IDS).c_str());
+        if (sw_idx != -1) {
+            if (gguf_get_kv_type(ctx, sw_idx) != GGUF_TYPE_ARRAY ||
+                gguf_get_arr_type(ctx, sw_idx) != GGUF_TYPE_INT32) {
+                throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_SINGLE_WORD_IDS).c_str()));
+            }
+            const size_t n_sw = gguf_get_arr_n(ctx, sw_idx);
+            if (n_sw > id_to_token.size()) {
+                throw std::runtime_error(format("too many entries in %s", kv(LLM_KV_TOKENIZER_SINGLE_WORD_IDS).c_str()));
+            }
+            const int32_t * sw_ids = (const int32_t *) gguf_get_arr_data(ctx, sw_idx);
+            for (size_t i = 0; i < n_sw; ++i) {
+                if (sw_ids[i] < 0 || (size_t) sw_ids[i] >= id_to_token.size()) {
+                    throw std::runtime_error(format("invalid token id %d in %s", sw_ids[i], kv(LLM_KV_TOKENIZER_SINGLE_WORD_IDS).c_str()));
+                }
+                _set_tokenid_attr(sw_ids[i], LLAMA_TOKEN_ATTR_SINGLE_WORD, true);
+            }
+        }
     }
 }
 
@@ -3649,6 +3669,72 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
 
 // #define PRETOKENIZERDEBUG
 
+// Rust regex \w, which HF uses for single_word tokens: Alphabetic, Mark, Decimal_Number, Connector_Punctuation, Join_Control
+// the unicode flags do not split numbers, so the numbers outside \w (category No) and the symbols inside it are listed here
+static const std::pair<uint32_t, uint32_t> word_excluded_numbers[] = {
+    {0x00B2, 0x00B3}, {0x00B9, 0x00B9}, {0x00BC, 0x00BE}, {0x09F4, 0x09F9},
+    {0x0B72, 0x0B77}, {0x0BF0, 0x0BF2}, {0x0C78, 0x0C7E}, {0x0D58, 0x0D5E},
+    {0x0D70, 0x0D78}, {0x0F2A, 0x0F33}, {0x1369, 0x137C}, {0x17F0, 0x17F9},
+    {0x19DA, 0x19DA}, {0x2070, 0x2070}, {0x2074, 0x2079}, {0x2080, 0x2089},
+    {0x2150, 0x215F}, {0x2189, 0x2189}, {0x2460, 0x249B}, {0x24EA, 0x24FF},
+    {0x2776, 0x2793}, {0x2CFD, 0x2CFD}, {0x3192, 0x3195}, {0x3220, 0x3229},
+    {0x3248, 0x324F}, {0x3251, 0x325F}, {0x3280, 0x3289}, {0x32B1, 0x32BF},
+    {0xA830, 0xA835}, {0x10107, 0x10133}, {0x10175, 0x10178}, {0x1018A, 0x1018B},
+    {0x102E1, 0x102FB}, {0x10320, 0x10323}, {0x10858, 0x1085F}, {0x10879, 0x1087F},
+    {0x108A7, 0x108AF}, {0x108FB, 0x108FF}, {0x10916, 0x1091B}, {0x109BC, 0x109BD},
+    {0x109C0, 0x109CF}, {0x109D2, 0x109FF}, {0x10A40, 0x10A48}, {0x10A7D, 0x10A7E},
+    {0x10A9D, 0x10A9F}, {0x10AEB, 0x10AEF}, {0x10B58, 0x10B5F}, {0x10B78, 0x10B7F},
+    {0x10BA9, 0x10BAF}, {0x10CFA, 0x10CFF}, {0x10E60, 0x10E7E}, {0x10F1D, 0x10F26},
+    {0x10F51, 0x10F54}, {0x10FC5, 0x10FCB}, {0x11052, 0x11065}, {0x111E1, 0x111F4},
+    {0x1173A, 0x1173B}, {0x118EA, 0x118F2}, {0x11C5A, 0x11C6C}, {0x11FC0, 0x11FD4},
+    {0x16B5B, 0x16B61}, {0x16E80, 0x16E96}, {0x1D2C0, 0x1D2D3}, {0x1D2E0, 0x1D2F3},
+    {0x1D360, 0x1D378}, {0x1E8C7, 0x1E8CF}, {0x1EC71, 0x1ECAB}, {0x1ECAD, 0x1ECAF},
+    {0x1ECB1, 0x1ECB4}, {0x1ED01, 0x1ED2D}, {0x1ED2F, 0x1ED3D}, {0x1F100, 0x1F10C},
+};
+
+static const std::pair<uint32_t, uint32_t> word_included_symbols[] = {
+    {0x24B6, 0x24E9}, {0x1F130, 0x1F149}, {0x1F150, 0x1F169}, {0x1F170, 0x1F189},
+};
+
+template <size_t N>
+static bool cpt_in_ranges(const std::pair<uint32_t, uint32_t> (&ranges)[N], uint32_t cpt) {
+    const auto * it = std::upper_bound(ranges, ranges + N, cpt, [](uint32_t c, const std::pair<uint32_t, uint32_t> & r) { return c < r.first; });
+    return it != ranges && cpt <= (it - 1)->second;
+}
+
+static bool is_word_cpt(uint32_t cpt) {
+    const auto flags = unicode_cpt_flags_from_cpt(cpt);
+    if (flags.is_number) {
+        return !cpt_in_ranges(word_excluded_numbers, cpt);
+    }
+    return flags.is_letter || flags.is_accent_mark || cpt_in_ranges(word_included_symbols, cpt) ||
+           cpt == '_' || cpt == 0x203F || cpt == 0x2040 || cpt == 0x2054 || cpt == 0xFE33 || cpt == 0xFE34 ||
+           (cpt >= 0xFE4D && cpt <= 0xFE4F) || cpt == 0xFF3F || cpt == 0x200C || cpt == 0x200D;
+}
+
+static bool is_word_cpt_at(const std::string & text, size_t offset) {
+    try {
+        return is_word_cpt(unicode_cpt_from_utf8(text, offset));
+    } catch (const std::invalid_argument &) {
+        // invalid UTF-8 is not a word character
+        return false;
+    }
+}
+
+// a single_word token matches only when no word character touches it on either side
+static bool is_single_word_match(const std::string & text, size_t match, size_t len) {
+    if (match > 0) {
+        size_t start = match - 1;
+        while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80) {
+            start--;
+        }
+        if (is_word_cpt_at(text, start)) {
+            return false;
+        }
+    }
+    return match + len >= text.size() || !is_word_cpt_at(text, match + len);
+}
+
 void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const {
     // for each special token
     for (const llama_token special_id : cache_special_tokens) {
@@ -3676,15 +3762,22 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
                 auto raw_text_base_length = fragment.length;
 
                 // loop over the text
+                size_t search_from = raw_text_base_offset;
                 while (true) {
                     // find the first occurrence of a given special token in this fragment
                     //  passing offset argument only limit the "search area" but match coordinates
                     //  are still relative to the source full raw_text
                     //  string_view begins at pos 0 for the same reason
-                    auto match = std::string_view(raw_text.data(), raw_text_base_offset + raw_text_base_length).find(text, raw_text_base_offset);
+                    auto match = std::string_view(raw_text.data(), raw_text_base_offset + raw_text_base_length).find(text, search_from);
 
                     // no occurrences found, stop processing this fragment for a given special token
                     if (match == std::string::npos) break;
+
+                    // a single_word token inside a word is left to the tokenizer model
+                    if ((data.attr & LLAMA_TOKEN_ATTR_SINGLE_WORD) && !is_single_word_match(raw_text, match, text.length())) {
+                        search_from = match + 1;
+                        continue;
+                    }
 
 #ifdef PRETOKENIZERDEBUG
                     LLAMA_LOG_WARN("FF: (%ld %ld %ld) '%s'\n", raw_text->length(), raw_text_base_offset, raw_text_base_length, raw_text->substr(raw_text_base_offset, raw_text_base_length).c_str());
@@ -3748,6 +3841,7 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
                         // repeat for the right side
                         raw_text_base_offset = right_reminder_offset;
                         raw_text_base_length = right_reminder_length;
+                        search_from = raw_text_base_offset;
 
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("RR: (%ld %ld) '%s'\n", raw_text_base_offset, raw_text_base_length, raw_text->substr(raw_text_base_offset, raw_text_base_length).c_str());

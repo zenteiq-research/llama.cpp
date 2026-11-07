@@ -384,6 +384,7 @@ class Keys:
         LIST                 = "tokenizer.ggml.tokens"
         TOKEN_TYPE           = "tokenizer.ggml.token_type"
         TOKEN_TYPE_COUNT     = "tokenizer.ggml.token_type_count"  # for BERT-style token types
+        SINGLE_WORD_IDS      = "tokenizer.ggml.single_word_token_ids"  # added tokens that only match as whole words
         SCORES               = "tokenizer.ggml.scores"
         MERGES               = "tokenizer.ggml.merges"
         BOS_ID               = "tokenizer.ggml.bos_token_id"

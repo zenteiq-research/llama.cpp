@@ -453,6 +453,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_LIST,                     "tokenizer.ggml.tokens"                   },
     { LLM_KV_TOKENIZER_TOKEN_TYPE,               "tokenizer.ggml.token_type"               },
     { LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT,         "tokenizer.ggml.token_type_count"         },
+    { LLM_KV_TOKENIZER_SINGLE_WORD_IDS,          "tokenizer.ggml.single_word_token_ids"    },
     { LLM_KV_TOKENIZER_SCORES,                   "tokenizer.ggml.scores"                   },
     { LLM_KV_TOKENIZER_MERGES,                   "tokenizer.ggml.merges"                   },
     { LLM_KV_TOKENIZER_BOS_ID,                   "tokenizer.ggml.bos_token_id"             },
