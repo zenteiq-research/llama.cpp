@@ -710,6 +710,22 @@ struct llm_tokenizer_bpe_session {
             word_collection = std::move(words);
         }
 
+        if (tok_pre == LLAMA_VOCAB_PRE_TYPE_DHIR) {
+            // HF BPE without an unk token drops symbols missing from the vocab before merging, so their neighbours can still merge
+            for (auto & word : word_collection) {
+                std::string kept;
+                kept.reserve(word.size());
+                for (size_t offset = 0; offset < word.size();) {
+                    const size_t len = std::min(word.size() - offset, unicode_len_utf8(word[offset]));
+                    if (vocab.text_to_token(word.substr(offset, len)) != LLAMA_TOKEN_NULL) {
+                        kept.append(word, offset, len);
+                    }
+                    offset += len;
+                }
+                word = std::move(kept);
+            }
+        }
+
         for (const auto & word : word_collection) {
             work_queue = llm_bigram_bpe::queue();
             symbols.clear();
@@ -2150,6 +2166,7 @@ struct llama_vocab::impl {
     std::vector<token_data>                      id_to_token;
 
     std::vector<llama_token> cache_special_tokens;
+    std::vector<std::vector<llama_token>> cache_special_by_first_byte; // dhir only, longest first
     std::vector<std::string> cache_token_to_piece; // llama_token_to_piece(special = true);
     struct pair_hash {
         size_t operator()(const std::pair<std::string, std::string> & p) const {
@@ -2194,6 +2211,7 @@ struct llama_vocab::impl {
     void init_tokenizer(enum llama_vocab_type type);
 
     void tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const;
+    void tokenizer_st_partition_leftmost_longest(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const;
 
     std::string token_to_piece_for_cache(
                   llama_token   token,
@@ -3439,6 +3457,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         );
 
+        if (pre_type == LLAMA_VOCAB_PRE_TYPE_DHIR) {
+            cache_special_by_first_byte.resize(256);
+            for (const llama_token id : cache_special_tokens) {
+                if (!id_to_token[id].text.empty()) {
+                    cache_special_by_first_byte[static_cast<unsigned char>(id_to_token[id].text[0])].push_back(id);
+                }
+            }
+        }
+
         LLAMA_LOG_INFO("%s: special tokens cache size = %u\n", __func__, (uint32_t) cache_special_tokens.size());
     }
 
@@ -3735,6 +3762,56 @@ static bool is_single_word_match(const std::string & text, size_t match, size_t 
     return match + len >= text.size() || !is_word_cpt_at(text, match + len);
 }
 
+// HF added-token split: scan left to right and take the longest added token at each position (LeftmostLongest)
+// tokenizer_st_partition places the longest tokens first over the whole text, so it differs when added tokens overlap: for ".\n    " it takes "\n    " where HF takes ".\n"
+void llama_vocab::impl::tokenizer_st_partition_leftmost_longest(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const {
+    GGML_ASSERT(!buffer.empty() && buffer.front().type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT);
+    if (cache_special_by_first_byte.empty()) {
+        return; // load tokenizes "\n" before the cache is built
+    }
+    const std::string & raw_text = buffer.front().raw_text;
+
+    std::forward_list<fragment_buffer_variant> out;
+    auto tail = out.before_begin();
+    size_t pending = 0;
+    size_t pos = 0;
+    while (pos < raw_text.size()) {
+        llama_token found = LLAMA_TOKEN_NULL;
+        size_t found_len = 0;
+        for (const llama_token id : cache_special_by_first_byte[static_cast<unsigned char>(raw_text[pos])]) {
+            const auto & data = id_to_token[id];
+            if (!parse_special && (data.attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_UNKNOWN))) {
+                continue;
+            }
+            const std::string & text = data.text;
+            if (raw_text.compare(pos, text.size(), text) == 0) {
+                found = id;
+                found_len = text.size();
+                break;
+            }
+        }
+        if (found == LLAMA_TOKEN_NULL) {
+            pos++;
+            continue;
+        }
+        if ((id_to_token[found].attr & LLAMA_TOKEN_ATTR_SINGLE_WORD) && !is_single_word_match(raw_text, pos, found_len)) {
+            // HF resumes the scan after a rejected single_word match
+            pos += found_len;
+            continue;
+        }
+        if (pos > pending) {
+            tail = out.emplace_after(tail, raw_text, pending, pos - pending);
+        }
+        tail = out.emplace_after(tail, found);
+        pos += found_len;
+        pending = pos;
+    }
+    if (pending < raw_text.size()) {
+        tail = out.emplace_after(tail, raw_text, pending, raw_text.size() - pending);
+    }
+    buffer.swap(out);
+}
+
 void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const {
     // for each special token
     for (const llama_token special_id : cache_special_tokens) {
@@ -3918,7 +3995,11 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
 
     if (!raw_text.empty()) {
         fragment_buffer.emplace_front(raw_text, 0, raw_text.length());
-        tokenizer_st_partition(fragment_buffer, parse_special);
+        if (pre_type == LLAMA_VOCAB_PRE_TYPE_DHIR) {
+            tokenizer_st_partition_leftmost_longest(fragment_buffer, parse_special);
+        } else {
+            tokenizer_st_partition(fragment_buffer, parse_special);
+        }
     }
 
     switch (get_type()) {
