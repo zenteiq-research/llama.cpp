@@ -2380,6 +2380,9 @@ class TextModel(ModelBase):
         if chkhsh == "a9af07a84191f55098b248ae6f3dfe9e32d3190bebe8eafd91c1ddec9bc3449f":
             # ref: https://huggingface.co/IFM/K2-Horizon-36B
             res = "k2-horizon"
+        if chkhsh == "da3730daa43a7ab174efdca743c46178805d1119e2d04d1f4260f2ed4dd68762":
+            # ref: https://huggingface.co/zenteiq-ai/Dhir-2B
+            res = "dhir"
 
         if res is None:
             logger.warning("\n")

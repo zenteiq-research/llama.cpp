@@ -584,6 +584,10 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 regex_exprs = { "\\p{N}", "\\s+|[\\p{L}\\p{N}_]+|[^\\p{L}\\p{N}_\\s]+" };
                 byte_encode = false;
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_DHIR:
+                // no pre-split: BPE merges can cross whitespace (HF ByteLevel with use_regex=false)
+                regex_exprs = {};
+                break;
             case LLAMA_VOCAB_PRE_TYPE_WHITESPACE:
                 // whitespace pre-tokenizer (jinaai/jina-embeddings-v2-base-zh)
                 regex_exprs = {
@@ -2769,6 +2773,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "soprano") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SOPRANO;
+            } else if (
+                tokenizer_pre == "dhir") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_DHIR;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
