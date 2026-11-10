@@ -17,6 +17,41 @@
 
 </div>
 
+## Zenteiq Research fork: Dhir models
+
+This is the [Zenteiq Research](https://github.com/zenteiq-research) fork of llama.cpp. It adds support for the
+Dhir language models, developed under the IndiaAI Foundation Models initiative
+([IndiaAI](https://indiaai.gov.in), [MeitY](https://www.meity.gov.in)). Use it until Dhir support is merged upstream.
+
+| Model | Architecture | GGUF on Hugging Face | AIKosh |
+| --- | --- | --- | --- |
+| Dhir 2B | `dhir` | [`zenteiq-ai/Dhir-2B-8bit`](https://huggingface.co/zenteiq-ai/Dhir-2B-8bit), [`zenteiq-ai/Dhir-2B-4bit`](https://huggingface.co/zenteiq-ai/Dhir-2B-4bit) | [Dhir 2B](https://aikosh.indiaai.gov.in/home/models/details/dhir_2b.html) |
+| Dhir 5B MoE | `dhirmoe` | [`zenteiq-ai/Dhir-5B-A1.7B-8bit`](https://huggingface.co/zenteiq-ai/Dhir-5B-A1.7B-8bit), [`zenteiq-ai/Dhir-5B-A1.7B-4bit`](https://huggingface.co/zenteiq-ai/Dhir-5B-A1.7B-4bit) | [Dhir 5B](https://aikosh.indiaai.gov.in/home/models/details/dhir_5b_1.html) |
+
+Build (add `-DGGML_CUDA=ON` for an NVIDIA GPU):
+
+```bash
+git clone -b dhir https://github.com/zenteiq-research/llama.cpp
+cd llama.cpp
+cmake -B build
+cmake --build build -j --target llama-server llama-cli
+```
+
+Run a model from Hugging Face, or with `-m` a `.gguf` file from an AIKosh download (unzip it first):
+
+```bash
+./build/bin/llama-server -hf zenteiq-ai/Dhir-2B-4bit --jinja --port 8080   # OpenAI-compatible API
+./build/bin/llama-cli -hf zenteiq-ai/Dhir-5B-A1.7B-8bit --jinja            # chat in the terminal
+./build/bin/llama-server -m Dhir-2B-Q4_K_M.gguf --jinja --port 8080
+```
+
+To convert the BF16 checkpoints ([`zenteiq-ai/Dhir-2B`](https://huggingface.co/zenteiq-ai/Dhir-2B),
+[`zenteiq-ai/Dhir-5B-A1.7B`](https://huggingface.co/zenteiq-ai/Dhir-5B-A1.7B)) yourself, use
+`python convert_hf_to_gguf.py <model dir>`. The model support is also on the `dhir-support` branch: five commits on
+upstream `master`, without this section.
+
+---
+
 ## Quick start
 
 A few options to get `llama.cpp` installed on your machine:
