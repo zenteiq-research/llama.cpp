@@ -1047,6 +1047,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
         case LLM_ARCH_METIS16:
+        case LLM_ARCH_DHIRMOE:
             return true;
         default:
             return false;

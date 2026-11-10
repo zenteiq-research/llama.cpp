@@ -384,6 +384,10 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_k2_horizon(params);
         case LLM_ARCH_KOLIBRI1:
             return new llama_model_kolibri1(params);
+        case LLM_ARCH_DHIR:
+            return new llama_model_dhir(params);
+        case LLM_ARCH_DHIRMOE:
+            return new llama_model_dhirmoe(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
@@ -1103,6 +1107,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_A13B:          return "A13B";
         case LLM_TYPE_1B_A400M:      return "1B.A400M";
         case LLM_TYPE_3B_A800M:      return "3B.A800M";
+        case LLM_TYPE_5B_A1_7B:      return "5B.A1.7B";
         case LLM_TYPE_7B_A1B:        return "7B.A1B";
         case LLM_TYPE_8B_A1B:        return "8B.A1B";
         case LLM_TYPE_7_9B_A1_3B:    return "7.9B.A1.3B";
@@ -3821,6 +3826,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_HRM_TEXT:
         case LLM_ARCH_BEAM:
         case LLM_ARCH_KOLIBRI1:
+        case LLM_ARCH_DHIR:
+        case LLM_ARCH_DHIRMOE:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_DFLASH:
